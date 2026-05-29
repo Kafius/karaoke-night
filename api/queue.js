@@ -1,20 +1,25 @@
-const fs = require('fs');
-const path = require('path');
+const { Redis } = require('@upstash/redis');
 
-const FILE = path.join('/tmp', 'karaoke-queue.json');
+// The Upstash Marketplace integration sets KV_REST_API_* (Vercel-style) and/or
+// UPSTASH_REDIS_REST_* env vars. Support whichever pair is present.
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
-function read() {
+const KEY = 'karaoke:queue';
+
+async function read() {
   try {
-    return JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    const list = await redis.get(KEY);
+    return Array.isArray(list) ? list : [];
   } catch (e) {
     return [];
   }
 }
 
-function write(list) {
-  try {
-    fs.writeFileSync(FILE, JSON.stringify(list));
-  } catch (e) {}
+async function write(list) {
+  await redis.set(KEY, list);
 }
 
 function body(req) {
@@ -40,7 +45,12 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
-  let list = read();
+  if (!redis.url && !(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)) {
+    res.status(500).json({ error: 'storage not configured' });
+    return;
+  }
+
+  let list = await read();
 
   if (req.method === 'GET') {
     res.status(200).json(list);
@@ -57,7 +67,7 @@ module.exports = async (req, res) => {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       singer, song, artist, done: false
     });
-    write(list);
+    await write(list);
     res.status(200).json(list);
     return;
   }
@@ -70,7 +80,7 @@ module.exports = async (req, res) => {
       list.forEach((x) => (map[x.id] = x));
       const next = b.order.map((id) => map[id]).filter(Boolean);
       list.forEach((x) => { if (!b.order.includes(x.id)) next.push(x); });
-      write(next);
+      await write(next);
       res.status(200).json(next);
       return;
     }
@@ -81,16 +91,16 @@ module.exports = async (req, res) => {
     if (b.singer != null) item.singer = clean(b.singer, 60);
     if (b.song != null) item.song = clean(b.song, 120);
     if (b.artist != null) item.artist = clean(b.artist, 80);
-    write(list);
+    await write(list);
     res.status(200).json(list);
     return;
   }
 
   if (req.method === 'DELETE') {
     const b = await body(req);
-    if (b.all === true) { write([]); res.status(200).json([]); return; }
+    if (b.all === true) { await write([]); res.status(200).json([]); return; }
     list = list.filter((x) => x.id !== b.id);
-    write(list);
+    await write(list);
     res.status(200).json(list);
     return;
   }

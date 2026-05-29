@@ -1,0 +1,9 @@
+{
+  "name": "karaoke-night",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A live, shared karaoke queue with a guest request page and a host console.",
+  "dependencies": {
+    "@upstash/redis": "^1.34.3"
+  }
+}
