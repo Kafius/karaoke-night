@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Karaoke night — request a song</title>
+<style>
+  :root { --bg:#0f0a1e; --card:#1c1530; --card2:#251a40; --line:#3a2c5c; --txt:#f3eefb; --mut:#b3a4d4; --acc:#a855f7; --acc2:#ec4899; --ok:#34d399; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:radial-gradient(120% 90% at 50% 0%, #2a1850 0%, var(--bg) 60%); color:var(--txt); min-height:100vh; padding:20px 16px 48px; }
+  .wrap { max-width:480px; margin:0 auto; }
+  .hero { text-align:center; padding:14px 0 22px; }
+  .hero h1 { margin:0; font-size:30px; font-weight:800; letter-spacing:-0.5px; background:linear-gradient(90deg,var(--acc),var(--acc2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .hero p { margin:8px 0 0; color:var(--mut); font-size:15px; }
+  .mic { font-size:40px; display:block; margin-bottom:4px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px; margin-bottom:22px; }
+  label { display:block; font-size:13px; color:var(--mut); margin:0 0 6px; font-weight:600; }
+  input { width:100%; background:var(--card2); border:1px solid var(--line); border-radius:12px; padding:14px; color:var(--txt); font-size:16px; outline:none; }
+  input:focus { border-color:var(--acc); }
+  .row { display:flex; gap:10px; }
+  .row > div { flex:1; }
+  .field { margin-bottom:14px; }
+  button.primary { width:100%; border:none; border-radius:14px; padding:16px; font-size:17px; font-weight:700; color:#fff; background:linear-gradient(90deg,var(--acc),var(--acc2)); cursor:pointer; }
+  button.primary:active { transform:scale(0.985); }
+  button.primary:disabled { opacity:0.6; }
+  .msg { text-align:center; font-size:14px; min-height:20px; margin-top:12px; font-weight:600; }
+  .qhead { display:flex; align-items:center; justify-content:space-between; margin:0 0 12px; }
+  .qhead h2 { margin:0; font-size:19px; font-weight:700; }
+  .cnt { color:var(--mut); font-size:14px; font-weight:500; }
+  .item { display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px 14px; margin-bottom:10px; }
+  .num { width:30px; height:30px; flex-shrink:0; border-radius:50%; background:linear-gradient(135deg,var(--acc),var(--acc2)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; }
+  .item .t { font-size:16px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .item .a { color:var(--mut); font-weight:400; }
+  .item .s { font-size:13px; color:var(--mut); margin-top:2px; }
+  .done { opacity:0.45; }
+  .done .t { text-decoration:line-through; }
+  .empty { text-align:center; color:var(--mut); font-size:14px; padding:24px; border:1px dashed var(--line); border-radius:14px; }
+  .reload { background:none; border:1px solid var(--line); color:var(--mut); border-radius:10px; padding:6px 12px; font-size:13px; cursor:pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <span class="mic">🎤</span>
+    <h1>Karaoke Night</h1>
+    <p>Add your song and watch for your name</p>
+  </div>
+
+  <div class="card">
+    <div class="field">
+      <label>Your name</label>
+      <input id="singer" placeholder="e.g. Sam" autocomplete="off" />
+    </div>
+    <div class="row field">
+      <div>
+        <label>Song</label>
+        <input id="song" placeholder="Mr. Brightside" autocomplete="off" />
+      </div>
+      <div>
+        <label>Artist</label>
+        <input id="artist" placeholder="The Killers" autocomplete="off" />
+      </div>
+    </div>
+    <button class="primary" id="add">Add me to the queue</button>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="qhead">
+    <h2>Up next <span class="cnt" id="cnt"></span></h2>
+    <button class="reload" id="reload">↻ Refresh</button>
+  </div>
+  <div id="list"></div>
+</div>
+
+<script>
+  var API = '/api/queue';
+  function esc(s){return (s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+  function render(list){
+    var active = list.filter(function(x){return !x.done;});
+    document.getElementById('cnt').textContent = active.length ? '· ' + active.length : '';
+    var box = document.getElementById('list');
+    if(!list.length){ box.innerHTML = '<div class="empty">No songs yet — be the first! 🎶</div>'; return; }
+    box.innerHTML = list.map(function(x,i){
+      return '<div class="item '+(x.done?'done':'')+'">'
+        + '<div class="num">'+(i+1)+'</div>'
+        + '<div style="flex:1;min-width:0;">'
+          + '<div class="t">'+esc(x.song)+(x.artist?' <span class="a">· '+esc(x.artist)+'</span>':'')+'</div>'
+          + '<div class="s">'+esc(x.singer)+'</div>'
+        + '</div>'
+      + '</div>';
+    }).join('');
+  }
+
+  function load(){
+    fetch(API).then(function(r){return r.json();}).then(render).catch(function(){});
+  }
+
+  document.getElementById('add').addEventListener('click', function(){
+    var btn = this;
+    var singer = document.getElementById('singer').value.trim();
+    var song = document.getElementById('song').value.trim();
+    var artist = document.getElementById('artist').value.trim();
+    var msg = document.getElementById('msg');
+    if(!singer || !song){ msg.style.color='#f87171'; msg.textContent='Add your name and a song first.'; return; }
+    btn.disabled = true;
+    fetch(API, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({singer:singer,song:song,artist:artist}) })
+      .then(function(r){return r.json();})
+      .then(function(list){
+        document.getElementById('song').value=''; document.getElementById('artist').value='';
+        var pos = list.filter(function(x){return !x.done;}).length;
+        msg.style.color='#34d399'; msg.textContent='✓ You\'re in! Position '+pos+'.';
+        render(list); btn.disabled=false;
+        setTimeout(function(){ msg.textContent=''; }, 4000);
+      })
+      .catch(function(){ msg.style.color='#f87171'; msg.textContent='Something went wrong — try again.'; btn.disabled=false; });
+  });
+
+  document.getElementById('reload').addEventListener('click', load);
+  load();
+  setInterval(load, 6000);
+</script>
+</body>
+</html>
