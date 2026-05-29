@@ -7,19 +7,21 @@ const redis = new Redis({
   token: process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-const KEY = 'karaoke:queue';
+const QUEUE_KEY = 'karaoke:queue';
+const DELETED_KEY = 'karaoke:deleted';
+const DELETED_MAX = 100; // keep the most recent N deletions for recovery
 
-async function read() {
+async function readList(key) {
   try {
-    const list = await redis.get(KEY);
+    const list = await redis.get(key);
     return Array.isArray(list) ? list : [];
   } catch (e) {
     return [];
   }
 }
 
-async function write(list) {
-  await redis.set(KEY, list);
+async function writeList(key, list) {
+  await redis.set(key, list);
 }
 
 function body(req) {
@@ -45,17 +47,17 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
-  if (!redis.url && !(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)) {
+  if (!(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)) {
     res.status(500).json({ error: 'storage not configured' });
     return;
   }
 
-  let list = await read();
+  let queue = await readList(QUEUE_KEY);
+  let deleted = await readList(DELETED_KEY);
 
-  if (req.method === 'GET') {
-    res.status(200).json(list);
-    return;
-  }
+  const send = (status) => res.status(status || 200).json({ queue, deleted });
+
+  if (req.method === 'GET') { send(); return; }
 
   if (req.method === 'POST') {
     const b = await body(req);
@@ -63,12 +65,12 @@ module.exports = async (req, res) => {
     const song = clean(b.song, 120);
     const artist = clean(b.artist, 80);
     if (!singer || !song) { res.status(400).json({ error: 'singer and song required' }); return; }
-    list.push({
+    queue.push({
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       singer, song, artist, done: false
     });
-    await write(list);
-    res.status(200).json(list);
+    await writeList(QUEUE_KEY, queue);
+    send();
     return;
   }
 
@@ -77,31 +79,79 @@ module.exports = async (req, res) => {
 
     if (b.action === 'reorder' && Array.isArray(b.order)) {
       const map = {};
-      list.forEach((x) => (map[x.id] = x));
+      queue.forEach((x) => (map[x.id] = x));
       const next = b.order.map((id) => map[id]).filter(Boolean);
-      list.forEach((x) => { if (!b.order.includes(x.id)) next.push(x); });
-      await write(next);
-      res.status(200).json(next);
+      queue.forEach((x) => { if (!b.order.includes(x.id)) next.push(x); });
+      queue = next;
+      await writeList(QUEUE_KEY, queue);
+      send();
       return;
     }
 
-    const item = list.find((x) => x.id === b.id);
-    if (!item) { res.status(404).json({ error: 'not found' }); return; }
+    if (b.action === 'restore') {
+      const idx = deleted.findIndex((x) => x.id === b.id);
+      if (idx !== -1) {
+        const item = deleted.splice(idx, 1)[0];
+        delete item.deletedAt;
+        queue.push(item);
+        await writeList(QUEUE_KEY, queue);
+        await writeList(DELETED_KEY, deleted);
+      }
+      send();
+      return;
+    }
+
+    const item = queue.find((x) => x.id === b.id);
+    if (!item) { send(404); return; }
     if (typeof b.done === 'boolean') item.done = b.done;
     if (b.singer != null) item.singer = clean(b.singer, 60);
     if (b.song != null) item.song = clean(b.song, 120);
     if (b.artist != null) item.artist = clean(b.artist, 80);
-    await write(list);
-    res.status(200).json(list);
+    await writeList(QUEUE_KEY, queue);
+    send();
     return;
   }
 
   if (req.method === 'DELETE') {
     const b = await body(req);
-    if (b.all === true) { await write([]); res.status(200).json([]); return; }
-    list = list.filter((x) => x.id !== b.id);
-    await write(list);
-    res.status(200).json(list);
+
+    // Permanently empty the recently-deleted bin.
+    if (b.action === 'purgeAll') {
+      deleted = [];
+      await writeList(DELETED_KEY, deleted);
+      send();
+      return;
+    }
+
+    // Permanently remove a single entry from the recently-deleted bin.
+    if (b.action === 'purge' && b.id) {
+      deleted = deleted.filter((x) => x.id !== b.id);
+      await writeList(DELETED_KEY, deleted);
+      send();
+      return;
+    }
+
+    // Clear the whole queue — but keep everything recoverable in the bin.
+    if (b.all === true) {
+      const stamped = queue.map((x) => Object.assign({}, x, { deletedAt: Date.now() }));
+      deleted = stamped.reverse().concat(deleted).slice(0, DELETED_MAX);
+      queue = [];
+      await writeList(QUEUE_KEY, queue);
+      await writeList(DELETED_KEY, deleted);
+      send();
+      return;
+    }
+
+    // Soft-delete a single entry: move it from the queue into the bin.
+    const idx = queue.findIndex((x) => x.id === b.id);
+    if (idx !== -1) {
+      const item = Object.assign({}, queue.splice(idx, 1)[0], { deletedAt: Date.now() });
+      deleted.unshift(item);
+      deleted = deleted.slice(0, DELETED_MAX);
+      await writeList(QUEUE_KEY, queue);
+      await writeList(DELETED_KEY, deleted);
+    }
+    send();
     return;
   }
 

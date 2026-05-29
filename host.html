@@ -39,6 +39,8 @@
   .done { opacity:0.5; }
   .done .t { text-decoration:line-through; }
   .ck-on { color:var(--ok); border-color:var(--ok); }
+  .act.restore { color:var(--ok); border-color:var(--ok); }
+  .delcnt { color:var(--mut); font-size:14px; font-weight:500; }
   .edit { background:var(--card2); border:1px solid var(--acc); border-radius:12px; padding:12px; margin-bottom:9px; }
   .edit .g { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px; }
   .edit input { font-size:14px; padding:10px; }
@@ -79,21 +81,33 @@
   <h2 class="qh">Queue</h2>
   <div id="list"></div>
   <button class="clear" id="clear">Clear entire queue</button>
+
+  <div id="delwrap" style="display:none">
+    <h2 class="qh" style="margin-top:28px">🗑 Recently deleted <span class="delcnt" id="delcnt"></span></h2>
+    <div id="dlist"></div>
+    <button class="clear" id="purgeall">Empty recently deleted</button>
+  </div>
 </div>
 
 <script>
   var API = '/api/queue';
   var editing = null;
+  var state = { queue: [], deleted: [] };
   function esc(s){return (s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 
-  function render(list){
-    var wait = list.filter(function(x){return !x.done;}).length;
+  function render(data){
+    var queue = Array.isArray(data) ? data : ((data && data.queue) || []);
+    var deleted = (data && !Array.isArray(data) && data.deleted) || [];
+    state.queue = queue; state.deleted = deleted;
+
+    var wait = queue.filter(function(x){return !x.done;}).length;
     document.getElementById('s-wait').textContent = wait;
-    document.getElementById('s-done').textContent = list.length - wait;
-    document.getElementById('s-total').textContent = list.length;
+    document.getElementById('s-done').textContent = queue.length - wait;
+    document.getElementById('s-total').textContent = queue.length;
+
     var box = document.getElementById('list');
-    if(!list.length){ box.innerHTML = '<div class="empty">Queue is empty.</div>'; return; }
-    box.innerHTML = list.map(function(x,i){
+    if(!queue.length){ box.innerHTML = '<div class="empty">Queue is empty.</div>'; }
+    else box.innerHTML = queue.map(function(x,i){
       if(editing === x.id){
         return '<div class="edit">'
           + '<div class="g">'
@@ -110,7 +124,7 @@
       return '<div class="item '+(x.done?'done':'')+'">'
         + '<div class="ar">'
           + '<button data-act="up" data-id="'+x.id+'" '+(i===0?'disabled':'')+'>▲</button>'
-          + '<button data-act="down" data-id="'+x.id+'" '+(i===list.length-1?'disabled':'')+'>▼</button>'
+          + '<button data-act="down" data-id="'+x.id+'" '+(i===queue.length-1?'disabled':'')+'>▼</button>'
         + '</div>'
         + '<div class="num">'+(i+1)+'</div>'
         + '<div class="meta">'
@@ -120,6 +134,27 @@
         + '<button class="act '+(x.done?'ck-on':'')+'" data-act="done" data-id="'+x.id+'" title="Mark sung">✓</button>'
         + '<button class="act" data-act="edit" data-id="'+x.id+'" title="Edit">✎</button>'
         + '<button class="act" data-act="del" data-id="'+x.id+'" title="Remove">🗑</button>'
+      + '</div>';
+    }).join('');
+
+    renderDeleted(deleted);
+  }
+
+  function renderDeleted(deleted){
+    var wrap = document.getElementById('delwrap');
+    var box = document.getElementById('dlist');
+    if(!deleted.length){ wrap.style.display='none'; box.innerHTML=''; return; }
+    wrap.style.display='block';
+    document.getElementById('delcnt').textContent = '· ' + deleted.length;
+    box.innerHTML = deleted.map(function(x){
+      return '<div class="item done">'
+        + '<div class="num" style="background:linear-gradient(135deg,#6b7280,#4b5563)">🗑</div>'
+        + '<div class="meta">'
+          + '<div class="t">'+esc(x.song)+(x.artist?' <span class="a">· '+esc(x.artist)+'</span>':'')+'</div>'
+          + '<div class="s">🎤 '+esc(x.singer)+'</div>'
+        + '</div>'
+        + '<button class="act restore" data-act="restore" data-id="'+x.id+'" title="Restore to queue">↩</button>'
+        + '<button class="act" data-act="purge" data-id="'+x.id+'" title="Delete permanently">✕</button>'
       + '</div>';
     }).join('');
   }
@@ -146,15 +181,19 @@
   document.getElementById('reload').addEventListener('click', load);
 
   document.getElementById('clear').addEventListener('click', function(){
-    if(confirm('Clear the entire queue? This cannot be undone.')) api('DELETE',{all:true});
+    if(confirm('Clear the entire queue? Songs move to "Recently deleted" so you can restore them.')) api('DELETE',{all:true});
   });
 
-  document.getElementById('list').addEventListener('click', function(e){
+  document.getElementById('purgeall').addEventListener('click', function(){
+    if(confirm('Permanently empty the recently-deleted list? This cannot be undone.')) api('DELETE',{action:'purgeAll'});
+  });
+
+  function onAction(e){
     var btn = e.target.closest('button[data-act]'); if(!btn || btn.disabled) return;
     var id = btn.getAttribute('data-id'), act = btn.getAttribute('data-act');
 
-    if(act==='edit'){ editing=id; fetch(API).then(function(r){return r.json();}).then(render); return; }
-    if(act==='cancel'){ editing=null; load(); return; }
+    if(act==='edit'){ editing=id; render(state); return; }
+    if(act==='cancel'){ editing=null; render(state); return; }
     if(act==='save'){
       var s=document.getElementById('e-singer').value.trim();
       var so=document.getElementById('e-song').value.trim();
@@ -162,25 +201,37 @@
       if(!s||!so) return;
       editing=null; api('PATCH',{id:id,singer:s,song:so,artist:ar}); return;
     }
-    if(act==='del'){ if(editing===id) editing=null; api('DELETE',{id:id}); return; }
+    if(act==='del'){
+      var it=state.queue.find(function(x){return x.id===id;});
+      var label = it ? '"'+it.song+'" ('+it.singer+')' : 'this entry';
+      if(!confirm('Delete '+label+'?\n\nIt moves to "Recently deleted" where you can restore it.')) return;
+      if(editing===id) editing=null;
+      api('DELETE',{id:id}); return;
+    }
     if(act==='done'){
-      fetch(API).then(function(r){return r.json();}).then(function(list){
-        var it=list.find(function(x){return x.id===id;}); if(it) api('PATCH',{id:id,done:!it.done});
-      });
+      var d=state.queue.find(function(x){return x.id===id;}); if(d) api('PATCH',{id:id,done:!d.done});
       return;
     }
     if(act==='up' || act==='down'){
-      fetch(API).then(function(r){return r.json();}).then(function(list){
-        var idx=list.findIndex(function(x){return x.id===id;});
-        var j = act==='up'? idx-1 : idx+1;
-        if(j<0||j>=list.length) return;
-        var ids=list.map(function(x){return x.id;});
-        var t=ids[idx]; ids[idx]=ids[j]; ids[j]=t;
-        api('PATCH',{action:'reorder',order:ids});
-      });
+      var idx=state.queue.findIndex(function(x){return x.id===id;});
+      var j = act==='up'? idx-1 : idx+1;
+      if(idx<0 || j<0 || j>=state.queue.length) return;
+      var ids=state.queue.map(function(x){return x.id;});
+      var t=ids[idx]; ids[idx]=ids[j]; ids[j]=t;
+      api('PATCH',{action:'reorder',order:ids});
       return;
     }
-  });
+    if(act==='restore'){ api('PATCH',{action:'restore',id:id}); return; }
+    if(act==='purge'){
+      var dd=state.deleted.find(function(x){return x.id===id;});
+      var dl = dd ? '"'+dd.song+'"' : 'this entry';
+      if(!confirm('Permanently delete '+dl+'? This cannot be undone.')) return;
+      api('DELETE',{action:'purge',id:id}); return;
+    }
+  }
+
+  document.getElementById('list').addEventListener('click', onAction);
+  document.getElementById('dlist').addEventListener('click', onAction);
 
   load();
   setInterval(function(){ if(!editing) load(); }, 6000);

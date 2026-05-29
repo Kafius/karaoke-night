@@ -79,9 +79,10 @@
     btn.disabled = true;
     fetch(API, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({singer:singer,song:song,artist:artist}) })
       .then(function(r){return r.json();})
-      .then(function(list){
+      .then(function(data){
+        var queue = Array.isArray(data) ? data : ((data && data.queue) || []);
         document.getElementById('song').value=''; document.getElementById('artist').value='';
-        var pos = list.filter(function(x){return !x.done;}).length;
+        var pos = queue.filter(function(x){return !x.done;}).length;
         msg.style.color='#34d399'; msg.textContent='✓ You\'re in! Position '+pos+'.';
         btn.disabled=false;
         setTimeout(function(){ msg.textContent=''; }, 4000);
